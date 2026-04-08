@@ -18,46 +18,34 @@ default:
 develop:
     nix develop
 
+# Set up Python virtualenv via uv
+setup:
+    uv sync
+
 # --- Quality ---
 
 # Run tests
 test:
-    @echo "TODO: define test command"
-    # Go:     go test ./...
-    # Elixir: mix test
-    # Rust:   cargo test
+    uv run pytest tests/ -v
 
 # Format code
 fmt:
-    @echo "TODO: define fmt command"
-    # Go:     go fmt ./...
-    # Elixir: mix format
-    # Rust:   cargo fmt
-    # Nix:    nixfmt .
+    uv run ruff format src/ tests/
+    uv run ruff check --fix src/ tests/
 
 # Run all quality checks
 check: fmt test
 
 # --- Build ---
 
-# Build the project (iterative/dev build — "does the compiler love this?")
+# Build the project (type check + lint)
 build:
-    @echo "TODO: define build command"
-    # Go:     go build -o bin/unkork .
-    # Elixir: mix compile --warnings-as-errors
-    # Rust:   cargo build
+    uv run ruff check src/ tests/
+    uv run pyright src/
 
 # Remove build artifacts
-# clean:
-#     rm -rf result bin/
-
-# --- Development ---
-
-# Run in development mode (live reload, local server, etc.)
-# dev:
-#     # Go:     go run . --dev
-#     # Elixir: iex -S mix phx.server
-#     # Rust:   cargo tauri dev
+clean:
+    rm -rf .venv data/ models/ __pycache__ .pytest_cache .ruff_cache
 
 # --- Shipping ---
 
