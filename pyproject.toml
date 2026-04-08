@@ -14,14 +14,16 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+kokoro = [
+    "kokoro>=0.9",
+    "kokoro-onnx>=0.4",
+]
+
+[dependency-groups]
 dev = [
     "pytest>=7.0",
     "ruff>=0.4",
     "pyright>=1.1",
-]
-kokoro = [
-    "kokoro>=0.9",
-    "kokoro-onnx>=0.4",
 ]
 
 [project.scripts]
