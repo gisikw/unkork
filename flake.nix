@@ -44,7 +44,11 @@
             # Lazy build: materialize container on first run
             if ! podman image exists "\$IMAGE_TAG" 2>/dev/null; then
               echo "Building unkork container (first run)..." >&2
+              # Use persistent storage for build temp files (rootfs is tmpfs)
+              export TMPDIR=/var/lib/unkork/tmp
+              mkdir -p "\$TMPDIR"
               podman build -t "\$IMAGE_TAG" -f "\$SHARE_DIR/Containerfile" "\$SHARE_DIR"
+              rm -rf "\$TMPDIR"
             fi
 
             exec podman run --rm -it \
