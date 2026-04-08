@@ -1,4 +1,4 @@
-name: Build and Test
+name: Build and Deploy
 
 on:
   push:
@@ -10,8 +10,29 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Lint
-        run: nix develop -c ruff check src/ tests/
+      - name: Configure Attic
+        run: |
+          mkdir -p ~/.config/attic
+          printf '%s\n' \
+            'default-server = "forge"' \
+            '' \
+            '[servers.forge]' \
+            "endpoint = \"$ATTIC_CACHE_URL\"" \
+            "token = \"$(cat $ATTIC_TOKEN_FILE)\"" \
+            > ~/.config/attic/config.toml
 
-      - name: Test
-        run: nix develop -c just test
+      - name: Build
+        run: nix build .#default -L
+
+      - name: Push to Attic
+        run: attic push fort ./result
+
+      - name: Register Overlay
+        run: |
+          STORE_PATH=$(readlink -f ./result)
+          curl -sf -X POST https://overlay-registry.gisi.network/infra/unkork \
+            -d "{\"storePath\":\"$STORE_PATH\"}"
+
+      - name: Trigger Refresh
+        run: |
+          fort frankenstein refresh '{"overlay": "unkork"}'
