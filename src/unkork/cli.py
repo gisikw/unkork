@@ -206,20 +206,25 @@ def predict(model: str, pca: str, audio: str, output: str):
 
 @main.command()
 @click.option("--start", required=True, help="Starting voice tensor (.pt)")
-@click.option("--target", required=True, help="Target reference audio")
+@click.option("--reference-dir", required=True, help="Directory of target reference wav files")
 @click.option("--pca", required=True, help="Path to PCA transform (.npz)")
 @click.option("--iterations", default=50, help="CMA-ES iterations")
 @click.option("--popsize", default=8, help="CMA-ES population size per generation")
 @click.option("--sigma", default=0.5, help="CMA-ES initial step size in PCA space")
 @click.option("--output", default="refined.pt", help="Output refined tensor path")
 def refine(
-    start: str, target: str, pca: str, iterations: int,
+    start: str, reference_dir: str, pca: str, iterations: int,
     popsize: int, sigma: float, output: str,
 ):
-    """Refine a voice tensor with CMA-ES optimization.
+    """Refine a voice tensor using mel-spectrogram comparison.
 
-    Uses the predicted tensor from 'predict' as a warm start, then runs
-    CMA-ES in PCA space (50 dims) to locally optimize toward the target voice.
+    Compares synthesized audio against reference wav files (e.g., from
+    Qwen3-TTS) using mel-spectrogram distance. This captures timbre,
+    resonance, and spectral envelope — not just speaker identity.
+
+    Reference wav files should contain the standard test phrases, one per
+    file, sorted alphabetically. Generate them with the target voice
+    (e.g., via Qwen3-TTS clone endpoint).
     """
     from unkork.pca import load as load_pca
     from unkork.refinement import refine_tensor
@@ -231,9 +236,15 @@ def refine(
     click.echo(f"Loading PCA from {pca}...")
     pca_transform = load_pca(pca)
 
-    click.echo(f"Refining toward {target} ({iterations} iterations, pop={popsize})...")
+    ref_dir = Path(reference_dir)
+    ref_paths = sorted(str(p) for p in ref_dir.glob("*.wav"))
+    if not ref_paths:
+        raise click.ClickException(f"No .wav files found in {reference_dir}")
+    click.echo(f"Found {len(ref_paths)} reference audio files")
+
+    click.echo(f"Refining ({iterations} iterations, pop={popsize})...")
     refined, score = refine_tensor(
-        start_tensor, target, pca_transform,
+        start_tensor, ref_paths, pca_transform,
         max_iterations=iterations, popsize=popsize, sigma0=sigma,
     )
 

@@ -8,33 +8,36 @@ import click
 import numpy as np
 import torch
 
-from unkork.embeddings import extract_embedding, get_encoder
 from unkork.pca import PCATransform
 from unkork.pca import inverse_transform as pca_inverse
 from unkork.pca import transform as pca_forward
-from unkork.scoring import score_voice
-from unkork.synthesis import get_pipeline, synthesize_phrases
+from unkork.scoring import score_voice_mel
+from unkork.synthesis import PHRASES, get_pipeline, synthesize_phrases
 from unkork.tensors import flatten, unflatten
 
 
 def refine_tensor(
     start_tensor: torch.Tensor,
-    target_audio: str | Path,
+    reference_audio_paths: list[str],
     pca: PCATransform,
+    phrases: list[str] | None = None,
     max_iterations: int = 50,
     popsize: int = 8,
     sigma0: float = 0.5,
 ) -> tuple[torch.Tensor, float]:
-    """Refine a voice tensor toward a target voice using CMA-ES in PCA space.
+    """Refine a voice tensor toward target audio using CMA-ES in PCA space.
 
-    Optimizes in the PCA-projected space (50 dims) rather than the full
-    voice tensor space (130k dims), keeping CMA-ES's covariance matrix
-    tractable.
+    Scores candidates by mel-spectrogram distance against reference audio,
+    capturing timbre, resonance, and spectral envelope — not just speaker
+    identity.
 
     Args:
         start_tensor: Starting voice tensor (e.g., from MLP prediction).
-        target_audio: Path to target reference audio.
+        reference_audio_paths: Wav files of the target voice speaking the
+            same phrases used for synthesis (one per phrase).
         pca: Fitted PCA transform for projecting to/from voice space.
+        phrases: Text phrases to synthesize for comparison. Must match
+            the reference audio. Defaults to PHRASES[:len(reference_audio_paths)].
         max_iterations: Maximum CMA-ES generations.
         popsize: Population size per generation.
         sigma0: Initial step size in PCA space.
@@ -42,10 +45,10 @@ def refine_tensor(
     Returns:
         (refined_tensor, best_score)
     """
-    encoder = get_encoder()
     pipeline = get_pipeline()
 
-    target_embedding = extract_embedding(str(target_audio), encoder)
+    phrases = phrases or PHRASES[: len(reference_audio_paths)]
+    ref_paths = reference_audio_paths[: len(phrases)]
 
     # Project starting tensor into PCA space
     flat = flatten(start_tensor).astype(np.float64)
@@ -63,9 +66,9 @@ def refine_tensor(
 
         with tempfile.TemporaryDirectory() as tmpdir:
             try:
-                paths = synthesize_phrases(tensor, tmpdir, pipeline=pipeline)
-                audio_paths = [str(p) for p in paths]
-                score = score_voice(audio_paths, target_embedding, encoder)
+                paths = synthesize_phrases(tensor, tmpdir, phrases, pipeline)
+                gen_paths = [str(p) for p in paths]
+                score = score_voice_mel(gen_paths, ref_paths)
             except Exception:
                 return 1.0  # worst possible (CMA-ES minimizes)
 
@@ -81,7 +84,7 @@ def refine_tensor(
         {
             "maxiter": max_iterations,
             "popsize": popsize,
-            "verbose": -1,  # suppress CMA-ES output; we log ourselves
+            "verbose": -1,
         },
     )
 

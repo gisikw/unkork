@@ -1,9 +1,9 @@
-"""Voice scoring for optimization. Harmonic mean of similarity signals."""
+"""Voice scoring for optimization. Mel-spectrogram distance + speaker similarity."""
+
+from pathlib import Path
 
 import numpy as np
-from resemblyzer import VoiceEncoder
-
-from unkork.embeddings import embed_voice_samples, extract_embedding
+import soundfile as sf
 
 
 def cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
@@ -22,54 +22,102 @@ def harmonic_mean(values: list[float]) -> float:
     return len(values) / sum(1.0 / v for v in values)
 
 
-def score_voice(
-    generated_audio_paths: list[str],
-    target_embedding: np.ndarray,
-    encoder: VoiceEncoder | None = None,
-) -> float:
-    """Score a generated voice against a target speaker embedding.
+def mel_spectrogram(
+    audio: np.ndarray,
+    sr: int = 24000,
+    n_fft: int = 1024,
+    hop_length: int = 256,
+    n_mels: int = 80,
+) -> np.ndarray:
+    """Compute log mel-spectrogram from audio.
 
-    Uses a harmonic mean of:
-    1. Resemblyzer similarity — how close the voice is to the target
-    2. Self-similarity — how consistent the voice is across phrases
-
-    The harmonic mean penalizes any single low signal, preventing
-    degenerate solutions that fool one metric but not others.
-
-    Args:
-        generated_audio_paths: Paths to wav files synthesized with the candidate voice.
-        target_embedding: (256,) target speaker embedding.
-        encoder: Reusable VoiceEncoder instance.
+    Uses scipy for STFT and a manual mel filterbank to avoid librosa dependency.
 
     Returns:
-        Score in [0, 1]. Higher is better.
+        (n_mels, n_frames) log mel-spectrogram.
     """
-    from unkork.embeddings import get_encoder
+    from scipy.signal import stft
 
-    encoder = encoder or get_encoder()
+    # STFT
+    _, _, zxx = stft(audio, fs=sr, nperseg=n_fft, noverlap=n_fft - hop_length)
+    power = np.abs(zxx) ** 2
 
-    if not generated_audio_paths:
+    # Mel filterbank
+    fbank = _mel_filterbank(sr, n_fft, n_mels)
+    mel = fbank @ power
+
+    # Log scale with floor to avoid log(0)
+    return np.log(np.maximum(mel, 1e-10))
+
+
+def _mel_filterbank(sr: int, n_fft: int, n_mels: int) -> np.ndarray:
+    """Build a mel-scale filterbank matrix."""
+    fmin, fmax = 0.0, sr / 2.0
+    n_freqs = n_fft // 2 + 1
+
+    # Mel scale conversion
+    mel_min = 2595.0 * np.log10(1.0 + fmin / 700.0)
+    mel_max = 2595.0 * np.log10(1.0 + fmax / 700.0)
+    mel_points = np.linspace(mel_min, mel_max, n_mels + 2)
+    hz_points = 700.0 * (10.0 ** (mel_points / 2595.0) - 1.0)
+
+    bins = np.floor((n_fft + 1) * hz_points / sr).astype(int)
+    fbank = np.zeros((n_mels, n_freqs))
+
+    for i in range(n_mels):
+        for j in range(bins[i], bins[i + 1]):
+            fbank[i, j] = (j - bins[i]) / max(bins[i + 1] - bins[i], 1)
+        for j in range(bins[i + 1], bins[i + 2]):
+            fbank[i, j] = (bins[i + 2] - j) / max(bins[i + 2] - bins[i + 1], 1)
+
+    return fbank
+
+
+def mel_spectrogram_distance(audio_a: np.ndarray, audio_b: np.ndarray, sr: int = 24000) -> float:
+    """Mean squared error between mel-spectrograms of two audio signals.
+
+    Truncates to the shorter signal for alignment. Lower is better.
+    """
+    mel_a = mel_spectrogram(audio_a, sr=sr)
+    mel_b = mel_spectrogram(audio_b, sr=sr)
+
+    # Align to shorter
+    min_frames = min(mel_a.shape[1], mel_b.shape[1])
+    mel_a = mel_a[:, :min_frames]
+    mel_b = mel_b[:, :min_frames]
+
+    return float(np.mean((mel_a - mel_b) ** 2))
+
+
+def score_voice_mel(
+    generated_audio_paths: list[str],
+    reference_audio_paths: list[str],
+) -> float:
+    """Score generated audio against reference audio using mel-spectrogram distance.
+
+    Each generated audio file is compared to its corresponding reference file.
+    Score is 1 / (1 + mean_distance), so higher is better and in [0, 1].
+
+    Args:
+        generated_audio_paths: Wav files synthesized with the candidate voice.
+        reference_audio_paths: Wav files of the target voice saying the same phrases.
+
+    Returns:
+        Score in (0, 1]. Higher is better.
+    """
+    if not generated_audio_paths or not reference_audio_paths:
         return 0.0
 
-    # Extract embeddings for each generated phrase
-    gen_embeddings = [extract_embedding(p, encoder) for p in generated_audio_paths]
+    n = min(len(generated_audio_paths), len(reference_audio_paths))
+    distances = []
 
-    # Signal 1: Resemblyzer similarity to target (average across phrases)
-    target_sims = [cosine_similarity(e, target_embedding) for e in gen_embeddings]
-    resemblyzer_score = float(np.mean(target_sims))
+    for i in range(n):
+        gen_audio, gen_sr = sf.read(generated_audio_paths[i])
+        ref_audio, ref_sr = sf.read(reference_audio_paths[i])
 
-    # Signal 2: Self-similarity (average pairwise similarity between phrases)
-    if len(gen_embeddings) < 2:
-        self_sim = 1.0
-    else:
-        pairwise = []
-        for i in range(len(gen_embeddings)):
-            for j in range(i + 1, len(gen_embeddings)):
-                pairwise.append(cosine_similarity(gen_embeddings[i], gen_embeddings[j]))
-        self_sim = float(np.mean(pairwise))
+        # Resample to common rate if needed (both should be 24kHz from Kokoro)
+        sr = min(gen_sr, ref_sr)
+        distances.append(mel_spectrogram_distance(gen_audio, ref_audio, sr=sr))
 
-    # Shift similarities from [-1, 1] to [0, 1] for harmonic mean
-    resemblyzer_shifted = (resemblyzer_score + 1) / 2
-    self_sim_shifted = (self_sim + 1) / 2
-
-    return harmonic_mean([resemblyzer_shifted, self_sim_shifted])
+    mean_dist = float(np.mean(distances))
+    return 1.0 / (1.0 + mean_dist)
