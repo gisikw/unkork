@@ -71,6 +71,8 @@ def extract_spectral_features(
     features.append([rms.mean(), rms.std()])
 
     # F0 via pyin — fundamental frequency (register, pitch)
+    # Kept in the combined vector for MLP training, but also extractable
+    # separately via extract_f0_features() for independent scoring.
     f0, voiced_flag, _ = librosa.pyin(
         audio, fmin=50, fmax=600, sr=sr,
     )
@@ -103,4 +105,44 @@ def extract_spectral_features_batch(
         (feature_dim,) float32 array.
     """
     features = [extract_spectral_features(p, sr=sr, n_mfcc=n_mfcc) for p in audio_paths]
+    return np.stack(features).mean(axis=0).astype(np.float32)
+
+
+def extract_f0_features(
+    audio_path: str | Path,
+    sr: int = 24000,
+) -> np.ndarray:
+    """Extract F0/pitch features only.
+
+    Returns a 1-D float32 vector with:
+        - F0 mean (Hz) — register / pitch center
+        - F0 std (Hz) — pitch variability / expressiveness
+        - Fraction voiced — how much of the signal is pitched
+
+    These are the same 3 values embedded in the full spectral feature vector,
+    but extracted independently for separate scoring. This lets refinement
+    target register without flattening pitch dynamics or tonal character.
+    """
+    audio, file_sr = sf.read(audio_path)
+    if file_sr != sr:
+        audio = librosa.resample(audio, orig_sr=file_sr, target_sr=sr)
+    audio = audio.astype(np.float32)
+
+    f0, voiced_flag, _ = librosa.pyin(audio, fmin=50, fmax=600, sr=sr)
+    voiced = f0[voiced_flag]
+    if len(voiced) > 0:
+        return np.array([voiced.mean(), voiced.std(), voiced_flag.mean()], dtype=np.float32)
+    return np.zeros(3, dtype=np.float32)
+
+
+def extract_f0_features_batch(
+    audio_paths: list[str | Path],
+    sr: int = 24000,
+) -> np.ndarray:
+    """Extract and average F0 features across multiple audio files.
+
+    Returns:
+        (3,) float32 array.
+    """
+    features = [extract_f0_features(p, sr=sr) for p in audio_paths]
     return np.stack(features).mean(axis=0).astype(np.float32)

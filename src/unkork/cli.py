@@ -230,29 +230,31 @@ def predict(model: str, pca: str, audio: str, output: str):
 @click.option("--output", default="refined.pt", help="Output refined tensor path")
 @click.option(
     "--scorer", default="composite",
-    type=click.Choice(["mel", "resemblyzer", "spectral", "composite"]),
-    help="Scoring function: mel, resemblyzer, spectral, or composite (all three)",
+    type=click.Choice(["mel", "resemblyzer", "spectral", "f0", "composite"]),
+    help="Scoring function: mel, resemblyzer, spectral, f0, or composite (all four)",
 )
-@click.option("--mel-weight", default=0.35, type=float, help="Mel-spec weight in composite scorer")
-@click.option("--spectral-weight", default=0.40, type=float, help="Spectral features weight in composite scorer")
+@click.option("--mel-weight", default=0.30, type=float, help="Mel-spec weight in composite scorer")
+@click.option("--spectral-weight", default=0.30, type=float, help="Spectral features weight in composite scorer")
+@click.option("--f0-weight", default=0.15, type=float, help="F0/register weight in composite scorer")
 @click.option("--resemblyzer-weight", default=0.25, type=float, help="Resemblyzer weight in composite scorer")
 def refine(
     start: str, reference_dir: str, pca: str, iterations: int,
     popsize: int, sigma: float, output: str, scorer: str,
-    mel_weight: float, spectral_weight: float, resemblyzer_weight: float,
+    mel_weight: float, spectral_weight: float, f0_weight: float, resemblyzer_weight: float,
 ):
     """Refine a voice tensor toward target audio using CMA-ES optimization.
 
-    Supports four scoring modes:
+    Supports five scoring modes:
 
     \b
       mel        — Mel-spectrogram cosine distance (spectral shape per frame)
       resemblyzer — Resemblyzer speaker similarity (identity, dialect anchor)
-      spectral   — Librosa spectral features (MFCCs, F0, resonance, warmth)
-      composite  — Weighted harmonic mean of all three (default)
+      spectral   — Librosa spectral features (MFCCs, resonance, warmth)
+      f0         — F0/pitch only (register match without flattening dynamics)
+      composite  — Weighted harmonic mean of all four (default)
 
-    For composite mode, --mel-weight, --spectral-weight, and --resemblyzer-weight
-    control the balance. Weights are relative (normalized internally).
+    For composite mode, --mel-weight, --spectral-weight, --f0-weight, and
+    --resemblyzer-weight control the balance. Weights are relative.
     """
     from functools import partial
 
@@ -260,6 +262,7 @@ def refine(
     from unkork.refinement import refine_tensor
     from unkork.scoring import (
         score_voice_composite,
+        score_voice_f0,
         score_voice_mel,
         score_voice_resemblyzer,
         score_voice_spectral,
@@ -271,10 +274,12 @@ def refine(
         "mel": score_voice_mel,
         "resemblyzer": score_voice_resemblyzer,
         "spectral": score_voice_spectral,
+        "f0": score_voice_f0,
         "composite": partial(
             score_voice_composite,
             mel_weight=mel_weight,
             spectral_weight=spectral_weight,
+            f0_weight=f0_weight,
             resemblyzer_weight=resemblyzer_weight,
         ),
     }
@@ -294,7 +299,7 @@ def refine(
 
     scorer_desc = scorer
     if scorer == "composite":
-        scorer_desc = f"composite (mel={mel_weight:.2f}, spectral={spectral_weight:.2f}, resemblyzer={resemblyzer_weight:.2f})"
+        scorer_desc = f"composite (mel={mel_weight:.2f}, spectral={spectral_weight:.2f}, f0={f0_weight:.2f}, resemblyzer={resemblyzer_weight:.2f})"
     click.echo(f"Scorer: {scorer_desc}")
     click.echo(f"Refining ({iterations} iterations, pop={popsize})...")
     refined, score = refine_tensor(

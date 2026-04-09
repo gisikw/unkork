@@ -193,28 +193,66 @@ def score_voice_spectral(
     return cosine_similarity(gen_feat, ref_feat)
 
 
+def score_voice_f0(
+    generated_audio_paths: list[str],
+    reference_audio_paths: list[str],
+) -> float:
+    """Score generated audio against reference using F0/pitch features only.
+
+    Compares F0 mean (register), F0 std (pitch variability), and fraction
+    voiced. Scored independently from other spectral features so refinement
+    can target register without flattening expressiveness.
+
+    Uses 1 / (1 + normalized_distance) to convert to a (0, 1] score.
+    F0 mean is weighted 3x relative to std and voiced fraction to emphasize
+    register match over dynamics.
+
+    Returns:
+        Score in (0, 1]. Higher is better.
+    """
+    from unkork.features import extract_f0_features_batch
+
+    if not generated_audio_paths or not reference_audio_paths:
+        return 0.0
+
+    n = min(len(generated_audio_paths), len(reference_audio_paths))
+    gen_f0 = extract_f0_features_batch(generated_audio_paths[:n])
+    ref_f0 = extract_f0_features_batch(reference_audio_paths[:n])
+
+    # Weighted distance: F0 mean matters most for register targeting.
+    # Normalize by reference values to make distances scale-independent.
+    weights = np.array([3.0, 1.0, 1.0])
+    ref_scale = np.maximum(np.abs(ref_f0), 1.0)  # avoid div by zero
+    normalized_diff = np.abs(gen_f0 - ref_f0) / ref_scale
+    dist = float(np.average(normalized_diff, weights=weights))
+    return 1.0 / (1.0 + dist)
+
+
 def score_voice_composite(
     generated_audio_paths: list[str],
     reference_audio_paths: list[str],
-    mel_weight: float = 0.35,
-    spectral_weight: float = 0.40,
+    mel_weight: float = 0.30,
+    spectral_weight: float = 0.30,
+    f0_weight: float = 0.15,
     resemblyzer_weight: float = 0.25,
 ) -> float:
-    """Composite score: weighted harmonic mean of mel-spec + spectral + Resemblyzer.
+    """Composite score: weighted harmonic mean of 4 axes.
 
-    Three-axis scoring:
+    Four-axis scoring:
         - Mel-spectrogram: frame-level spectral shape (cosine distance)
-        - Spectral features: tonal characteristics — MFCCs, F0, resonance,
+        - Spectral features: tonal characteristics — MFCCs, resonance,
           breathiness, warmth (cosine similarity on librosa feature vectors)
+        - F0: register/pitch match, scored independently so it targets
+          pitch center without flattening expressiveness
         - Resemblyzer: speaker identity anchor, prevents dialect drift
 
     Weighted harmonic mean ensures no single axis can be near-zero without
-    tanking the composite. Default weights emphasize spectral features
-    (the new signal) while keeping mel-spec for shape and resemblyzer as anchor.
+    tanking the composite.
 
     Args:
         mel_weight: Weight for mel-spectrogram score.
         spectral_weight: Weight for librosa spectral feature score.
+        f0_weight: Weight for F0/register match.
         resemblyzer_weight: Weight for Resemblyzer speaker similarity.
 
     Returns:
@@ -222,9 +260,10 @@ def score_voice_composite(
     """
     mel_score = score_voice_mel(generated_audio_paths, reference_audio_paths)
     spectral_score = score_voice_spectral(generated_audio_paths, reference_audio_paths)
+    f0_score = score_voice_f0(generated_audio_paths, reference_audio_paths)
     resem_score = score_voice_resemblyzer(generated_audio_paths, reference_audio_paths)
 
     return harmonic_mean(
-        [mel_score, spectral_score, resem_score],
-        weights=[mel_weight, spectral_weight, resemblyzer_weight],
+        [mel_score, spectral_score, f0_score, resem_score],
+        weights=[mel_weight, spectral_weight, f0_weight, resemblyzer_weight],
     )
