@@ -168,27 +168,63 @@ def score_voice_resemblyzer(
     return cosine_similarity(gen_emb, ref_emb)
 
 
+def score_voice_spectral(
+    generated_audio_paths: list[str],
+    reference_audio_paths: list[str],
+) -> float:
+    """Score generated audio against reference using librosa spectral features.
+
+    Compares MFCCs, spectral centroid/rolloff/bandwidth, spectral contrast,
+    ZCR, RMS, F0, and mel-spec statistics. Cosine similarity on the full
+    feature vector captures tonal qualities — warmth, register, breathiness,
+    resonance — that mel-spectrogram distance and Resemblyzer both miss.
+
+    Returns:
+        Score in [-1, 1], typically (0, 1]. Higher is better.
+    """
+    from unkork.features import extract_spectral_features_batch
+
+    if not generated_audio_paths or not reference_audio_paths:
+        return 0.0
+
+    n = min(len(generated_audio_paths), len(reference_audio_paths))
+    gen_feat = extract_spectral_features_batch(generated_audio_paths[:n])
+    ref_feat = extract_spectral_features_batch(reference_audio_paths[:n])
+    return cosine_similarity(gen_feat, ref_feat)
+
+
 def score_voice_composite(
     generated_audio_paths: list[str],
     reference_audio_paths: list[str],
-    mel_weight: float = 0.5,
+    mel_weight: float = 0.35,
+    spectral_weight: float = 0.40,
+    resemblyzer_weight: float = 0.25,
 ) -> float:
-    """Composite score: weighted harmonic mean of mel-spec + Resemblyzer.
+    """Composite score: weighted harmonic mean of mel-spec + spectral + Resemblyzer.
 
-    Mel-spectrogram distance captures timbre, resonance, spectral envelope.
-    Resemblyzer similarity anchors speaker identity and prevents dialect drift.
-    Weighted harmonic mean ensures neither component can be near-zero without
-    tanking the composite.
+    Three-axis scoring:
+        - Mel-spectrogram: frame-level spectral shape (cosine distance)
+        - Spectral features: tonal characteristics — MFCCs, F0, resonance,
+          breathiness, warmth (cosine similarity on librosa feature vectors)
+        - Resemblyzer: speaker identity anchor, prevents dialect drift
+
+    Weighted harmonic mean ensures no single axis can be near-zero without
+    tanking the composite. Default weights emphasize spectral features
+    (the new signal) while keeping mel-spec for shape and resemblyzer as anchor.
 
     Args:
-        mel_weight: Weight for mel-spectrogram score. Resemblyzer gets (1 - mel_weight).
-            Higher values prioritize timbral match; lower values prioritize identity anchor.
+        mel_weight: Weight for mel-spectrogram score.
+        spectral_weight: Weight for librosa spectral feature score.
+        resemblyzer_weight: Weight for Resemblyzer speaker similarity.
 
     Returns:
         Score in (0, 1]. Higher is better.
     """
     mel_score = score_voice_mel(generated_audio_paths, reference_audio_paths)
+    spectral_score = score_voice_spectral(generated_audio_paths, reference_audio_paths)
     resem_score = score_voice_resemblyzer(generated_audio_paths, reference_audio_paths)
 
-    resem_weight = 1.0 - mel_weight
-    return harmonic_mean([mel_score, resem_score], weights=[mel_weight, resem_weight])
+    return harmonic_mean(
+        [mel_score, spectral_score, resem_score],
+        weights=[mel_weight, spectral_weight, resemblyzer_weight],
+    )

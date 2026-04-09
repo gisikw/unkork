@@ -38,3 +38,5 @@ def test_refine_help():
     assert "--iterations" in result.output
     assert "--scorer" in result.output
     assert "--mel-weight" in result.output
+    assert "--spectral-weight" in result.output
+    assert "--resemblyzer-weight" in result.output
