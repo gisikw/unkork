@@ -314,7 +314,7 @@ def refine(
 
 @main.command()
 @click.option("--voice", required=True, help="Voice tensor (.pt) to test")
-@click.option("--text", default="Hello Kevin. This is what I sound like in Kokoro.", help="Text to speak")
+@click.option("--text", default="Hello. This is what I sound like in Kokoro.", help="Text to speak")
 @click.option("--output", default="test.wav", help="Output wav file path")
 def speak(voice: str, text: str, output: str):
     """Synthesize speech with a voice tensor to test how it sounds."""
