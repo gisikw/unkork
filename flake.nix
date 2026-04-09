@@ -56,6 +56,8 @@
               --shm-size=4g \
               -v /var/lib/unkork:/data:Z \
               -v /var/lib/fort/drops:/drops:ro \
+              -v "\$(pwd):/work:Z" \
+              -w /work \
               "\$IMAGE_TAG" "\$@"
             WRAPPER
             chmod +x $out/bin/unkork
