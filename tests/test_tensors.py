@@ -3,7 +3,11 @@
 import numpy as np
 import torch
 
-from unkork.tensors import VOICE_FLAT_DIM, VOICE_SHAPE, blend, flatten, random_blends, unflatten
+from unkork.tensors import STYLE_DIM, blend, flatten, random_blends, unflatten
+
+# Use 510 to match real Kokoro v0.19 voices
+VOICE_SHAPE = (510, 1, STYLE_DIM)
+VOICE_FLAT_DIM = 510 * STYLE_DIM
 
 
 def _make_voice() -> torch.Tensor:
@@ -29,6 +33,15 @@ def test_flatten_unflatten_roundtrip():
     assert torch.allclose(original, reconstructed, atol=1e-6)
 
 
+def test_flatten_unflatten_different_sizes():
+    """Both 510 and 511 time steps should roundtrip cleanly."""
+    for n in [510, 511]:
+        original = torch.randn(n, 1, STYLE_DIM)
+        reconstructed = unflatten(flatten(original))
+        assert reconstructed.shape == (n, 1, STYLE_DIM)
+        assert torch.allclose(original, reconstructed, atol=1e-6)
+
+
 def test_blend_two_voices():
     v1 = torch.ones(VOICE_SHAPE) * 2.0
     v2 = torch.ones(VOICE_SHAPE) * 4.0
@@ -41,7 +54,6 @@ def test_blend_two_voices():
 def test_blend_normalizes_weights():
     v1 = torch.zeros(VOICE_SHAPE)
     v2 = torch.ones(VOICE_SHAPE) * 10.0
-    # Weights 2:8 should normalize to 0.2:0.8 -> result = 8.0
     weights = np.array([2.0, 8.0])
     result = blend([v1, v2], weights)
     expected = torch.ones(VOICE_SHAPE) * 8.0

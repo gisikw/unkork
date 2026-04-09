@@ -5,15 +5,18 @@ from pathlib import Path
 import numpy as np
 import torch
 
-VOICE_SHAPE = (511, 1, 256)
-VOICE_FLAT_DIM = 511 * 256  # 130816
+STYLE_DIM = 256
 
 
 def load_voice(path: str | Path) -> torch.Tensor:
-    """Load a Kokoro voice tensor from a .pt file."""
+    """Load a Kokoro voice tensor from a .pt file.
+
+    Validates shape is (N, 1, 256) — the time dimension N varies
+    between Kokoro versions (510 for v0.19, 511 for v1.0).
+    """
     tensor = torch.load(path, weights_only=True)
-    if tensor.shape != VOICE_SHAPE:
-        raise ValueError(f"Expected shape {VOICE_SHAPE}, got {tensor.shape}")
+    if tensor.ndim != 3 or tensor.shape[1] != 1 or tensor.shape[2] != STYLE_DIM:
+        raise ValueError(f"Expected shape (N, 1, {STYLE_DIM}), got {tensor.shape}")
     return tensor
 
 
@@ -24,19 +27,23 @@ def save_voice(tensor: torch.Tensor, path: str | Path) -> None:
 
 
 def flatten(tensor: torch.Tensor) -> np.ndarray:
-    """Flatten a (511, 1, 256) voice tensor to (130816,) float32 array."""
+    """Flatten a (N, 1, 256) voice tensor to a 1D float32 array."""
     return tensor.squeeze(1).reshape(-1).numpy().astype(np.float32)
 
 
 def unflatten(flat: np.ndarray) -> torch.Tensor:
-    """Reshape a flat array back to (511, 1, 256) voice tensor."""
-    return torch.tensor(flat.reshape(511, 256)).unsqueeze(1)
+    """Reshape a flat array back to (N, 1, 256) voice tensor.
+
+    Infers N from the array length: N = len(flat) // 256.
+    """
+    n = len(flat) // STYLE_DIM
+    return torch.tensor(flat.reshape(n, STYLE_DIM)).unsqueeze(1)
 
 
 def blend(tensors: list[torch.Tensor], weights: np.ndarray) -> torch.Tensor:
     """Linearly blend voice tensors with given weights. Weights are normalized."""
     weights = weights / weights.sum()
-    result = torch.zeros(VOICE_SHAPE)
+    result = torch.zeros_like(tensors[0])
     for tensor, w in zip(tensors, weights):
         result += w * tensor
     return result
