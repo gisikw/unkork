@@ -231,3 +231,20 @@ def refine(start: str, target: str, iterations: int, popsize: int, sigma: float,
 
     save_voice(refined, output)
     click.echo(f"Saved refined tensor -> {output} (score: {score:.4f})")
+
+
+@main.command()
+@click.option("--voice", required=True, help="Voice tensor (.pt) to test")
+@click.option("--text", default="Hello Kevin. This is what I sound like in Kokoro.", help="Text to speak")
+@click.option("--output", default="test.wav", help="Output wav file path")
+def speak(voice: str, text: str, output: str):
+    """Synthesize speech with a voice tensor to test how it sounds."""
+    from unkork.synthesis import get_pipeline, synthesize_voice
+    from unkork.tensors import load_voice
+
+    click.echo(f"Loading voice from {voice}...")
+    tensor = load_voice(voice)
+
+    click.echo(f"Synthesizing: {text!r}")
+    synthesize_voice(tensor, text, output, get_pipeline())
+    click.echo(f"Wrote {output}")
