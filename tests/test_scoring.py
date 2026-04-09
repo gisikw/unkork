@@ -89,7 +89,20 @@ def test_mel_spectrogram_distance_identical():
     """Identical signals have zero distance."""
     sr = 24000
     audio = np.sin(2 * np.pi * 440 * np.arange(sr) / sr).astype(np.float32)
-    assert mel_spectrogram_distance(audio, audio, sr=sr) == 0.0
+    assert abs(mel_spectrogram_distance(audio, audio, sr=sr)) < 1e-7
+
+
+def test_mel_spectrogram_distance_energy_invariant():
+    """Scaling amplitude should not significantly change cosine distance."""
+    sr = 24000
+    t = np.arange(sr) / sr
+    loud = np.sin(2 * np.pi * 440 * t).astype(np.float32)
+    quiet = loud * 0.1
+    different = np.sin(2 * np.pi * 880 * t).astype(np.float32)
+    # Same shape at different volumes should be much closer than different shapes
+    dist_volume = mel_spectrogram_distance(loud, quiet, sr=sr)
+    dist_shape = mel_spectrogram_distance(loud, different, sr=sr)
+    assert dist_volume < dist_shape
 
 
 def test_mel_spectrogram_distance_different():

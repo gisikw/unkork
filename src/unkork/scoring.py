@@ -85,9 +85,13 @@ def _mel_filterbank(sr: int, n_fft: int, n_mels: int) -> np.ndarray:
 
 
 def mel_spectrogram_distance(audio_a: np.ndarray, audio_b: np.ndarray, sr: int = 24000) -> float:
-    """Mean squared error between mel-spectrograms of two audio signals.
+    """Mean frame-wise cosine distance between mel-spectrograms.
 
-    Truncates to the shorter signal for alignment. Lower is better.
+    Uses cosine similarity per frame (column) so the metric measures spectral
+    *shape* rather than energy magnitude. This prevents the optimizer from
+    gaming the score by flattening spectral energy toward silence.
+
+    Truncates to the shorter signal for alignment. Lower is better (0 = identical shape).
     """
     mel_a = mel_spectrogram(audio_a, sr=sr)
     mel_b = mel_spectrogram(audio_b, sr=sr)
@@ -97,7 +101,13 @@ def mel_spectrogram_distance(audio_a: np.ndarray, audio_b: np.ndarray, sr: int =
     mel_a = mel_a[:, :min_frames]
     mel_b = mel_b[:, :min_frames]
 
-    return float(np.mean((mel_a - mel_b) ** 2))
+    # Cosine similarity per frame, then average distance
+    # Each column is an 80-dim mel vector for one time frame
+    similarities = []
+    for i in range(min_frames):
+        similarities.append(cosine_similarity(mel_a[:, i], mel_b[:, i]))
+
+    return 1.0 - float(np.mean(similarities))
 
 
 def score_voice_mel(
