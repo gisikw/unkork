@@ -207,25 +207,33 @@ def predict(model: str, pca: str, audio: str, output: str):
 @main.command()
 @click.option("--start", required=True, help="Starting voice tensor (.pt)")
 @click.option("--target", required=True, help="Target reference audio")
+@click.option("--pca", required=True, help="Path to PCA transform (.npz)")
 @click.option("--iterations", default=50, help="CMA-ES iterations")
 @click.option("--popsize", default=8, help="CMA-ES population size per generation")
-@click.option("--sigma", default=0.05, help="CMA-ES initial step size")
+@click.option("--sigma", default=0.5, help="CMA-ES initial step size in PCA space")
 @click.option("--output", default="refined.pt", help="Output refined tensor path")
-def refine(start: str, target: str, iterations: int, popsize: int, sigma: float, output: str):
+def refine(
+    start: str, target: str, pca: str, iterations: int,
+    popsize: int, sigma: float, output: str,
+):
     """Refine a voice tensor with CMA-ES optimization.
 
     Uses the predicted tensor from 'predict' as a warm start, then runs
-    CMA-ES to locally optimize toward the target voice.
+    CMA-ES in PCA space (50 dims) to locally optimize toward the target voice.
     """
+    from unkork.pca import load as load_pca
     from unkork.refinement import refine_tensor
     from unkork.tensors import load_voice, save_voice
 
     click.echo(f"Loading starting tensor from {start}...")
     start_tensor = load_voice(start)
 
+    click.echo(f"Loading PCA from {pca}...")
+    pca_transform = load_pca(pca)
+
     click.echo(f"Refining toward {target} ({iterations} iterations, pop={popsize})...")
     refined, score = refine_tensor(
-        start_tensor, target,
+        start_tensor, target, pca_transform,
         max_iterations=iterations, popsize=popsize, sigma0=sigma,
     )
 
