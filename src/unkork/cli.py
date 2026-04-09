@@ -24,11 +24,13 @@ def generate(voices_dir: str, output: str, count: int, phrases: int):
     1. Load all .pt voice files from --voices-dir
     2. Generate --count random blends
     3. Synthesize --phrases phrases per blend via Kokoro
-    4. Extract Resemblyzer embeddings, average per voice
-    5. Save (embeddings, flat tensors) to --output
+    4. Extract features: Resemblyzer embedding (256-dim) + librosa spectral
+       features (~220-dim), concatenated into a single input vector
+    5. Save (features, flat tensors) to --output
     """
     from unkork.dataset import save_dataset
     from unkork.embeddings import embed_voice_samples, get_encoder
+    from unkork.features import extract_spectral_features_batch
     from unkork.synthesis import PHRASES, get_pipeline, synthesize_phrases
     from unkork.tensors import flatten, load_voice, random_blends
 
@@ -45,8 +47,8 @@ def generate(voices_dir: str, output: str, count: int, phrases: int):
     click.echo(f"Generating {count} random blends...")
     blends = random_blends(source_tensors, count)
 
-    # Synthesize and extract embeddings
-    click.echo("Synthesizing and extracting embeddings...")
+    # Synthesize and extract features
+    click.echo("Synthesizing and extracting features...")
     pipeline = get_pipeline()
     encoder = get_encoder()
     phrase_subset = PHRASES[:phrases]
@@ -54,23 +56,30 @@ def generate(voices_dir: str, output: str, count: int, phrases: int):
     output_dir = Path(output)
     audio_dir = output_dir / "audio"
 
-    all_embeddings = []
+    all_features = []
     all_flat_tensors = []
 
     with click.progressbar(enumerate(blends), length=count, label="Processing") as bar:
         for i, tensor in bar:
             voice_audio_dir = audio_dir / f"voice_{i:04d}"
             paths = synthesize_phrases(tensor, voice_audio_dir, phrase_subset, pipeline)
+            str_paths = [str(p) for p in paths]
 
-            embedding = embed_voice_samples([str(p) for p in paths], encoder)
-            all_embeddings.append(embedding)
+            # Resemblyzer embedding (256-dim)
+            resem_embedding = embed_voice_samples(str_paths, encoder)
+            # Librosa spectral features (~220-dim)
+            spectral_features = extract_spectral_features_batch(str_paths)
+            # Concatenate into single input vector
+            combined = np.concatenate([resem_embedding, spectral_features])
+
+            all_features.append(combined)
             all_flat_tensors.append(flatten(tensor))
 
-    embeddings_arr = np.stack(all_embeddings)
+    features_arr = np.stack(all_features)
     tensors_arr = np.stack(all_flat_tensors)
 
-    save_dataset(embeddings_arr, tensors_arr, output_dir)
-    click.echo(f"Saved dataset: {embeddings_arr.shape[0]} samples -> {output_dir}")
+    save_dataset(features_arr, tensors_arr, output_dir)
+    click.echo(f"Saved dataset: {features_arr.shape[0]} samples, {features_arr.shape[1]}-dim features -> {output_dir}")
 
 
 @main.command()
@@ -95,8 +104,11 @@ def train(
     1. Load dataset from --data
     2. Fit PCA on voice tensors (--n-components dimensions)
     3. Project tensors to PCA space
-    4. Train MLP: 256 -> hidden -> hidden -> n_components
+    4. Train MLP: input_dim -> hidden -> hidden -> n_components
     5. Save model checkpoint + PCA transform to --output
+
+    Input dimension is determined by the dataset (256 for Resemblyzer-only,
+    ~476 for augmented features with librosa spectral features).
     """
     from unkork.dataset import load_dataset
     from unkork.model import VoiceCodec, save_checkpoint
@@ -168,7 +180,7 @@ def train(
 def predict(model: str, pca: str, audio: str, output: str):
     """Predict a Kokoro voice tensor from reference audio.
 
-    1. Extract Resemblyzer embedding from --audio
+    1. Extract features from --audio (Resemblyzer + librosa spectral)
     2. Run through trained MLP
     3. Inverse PCA transform -> full voice tensor
     4. Save as .pt
@@ -176,6 +188,7 @@ def predict(model: str, pca: str, audio: str, output: str):
     import torch
 
     from unkork.embeddings import extract_embedding
+    from unkork.features import extract_spectral_features
     from unkork.model import load_checkpoint
     from unkork.pca import inverse_transform
     from unkork.pca import load as load_pca
@@ -188,12 +201,15 @@ def predict(model: str, pca: str, audio: str, output: str):
     click.echo(f"Loading PCA from {pca}...")
     pca_transform = load_pca(pca)
 
-    click.echo(f"Extracting embedding from {audio}...")
-    embedding = extract_embedding(audio)
+    click.echo(f"Extracting features from {audio}...")
+    resem_embedding = extract_embedding(audio)
+    spectral_features = extract_spectral_features(audio)
+    features = np.concatenate([resem_embedding, spectral_features])
+    click.echo(f"  Feature vector: {features.shape[0]}-dim (resemblyzer={resem_embedding.shape[0]}, spectral={spectral_features.shape[0]})")
 
     # Predict PCA components
     with torch.no_grad():
-        x = torch.tensor(embedding, dtype=torch.float32).unsqueeze(0)
+        x = torch.tensor(features, dtype=torch.float32).unsqueeze(0)
         pca_pred = codec(x).squeeze(0).numpy()
 
     # Inverse PCA -> flat tensor -> voice tensor

@@ -21,7 +21,7 @@ ENV PIP_CACHE_DIR=/data/cache/pip
 # Source is copied after so code changes don't bust the pip layer cache.
 COPY pyproject.toml /app/
 RUN pip install --no-cache-dir \
-    torch numpy scipy resemblyzer cma soundfile click \
+    torch numpy scipy resemblyzer cma soundfile librosa click \
     kokoro kokoro-onnx
 
 # Pre-install spacy model so Kokoro doesn't pip-install it at runtime.
