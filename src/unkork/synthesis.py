@@ -44,12 +44,9 @@ def synthesize_voice(
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # Kokoro expects the voice tensor as a numpy array
-    voice_np = voice_tensor.numpy()
-
     # Generate audio — KPipeline yields (graphemes, phonemes, audio) tuples
     audio_chunks = []
-    for _, _, audio in pipeline(text, voice=voice_np):
+    for _, _, audio in pipeline(text, voice=voice_tensor):
         audio_chunks.append(audio)
 
     if not audio_chunks:
