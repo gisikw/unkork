@@ -36,3 +36,5 @@ def test_refine_help():
     result = runner.invoke(main, ["refine", "--help"])
     assert result.exit_code == 0
     assert "--iterations" in result.output
+    assert "--scorer" in result.output
+    assert "--mel-weight" in result.output

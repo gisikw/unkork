@@ -1,6 +1,7 @@
 """CMA-ES refinement of voice tensors in PCA space."""
 
 import tempfile
+from collections.abc import Callable
 from pathlib import Path
 
 import cma
@@ -15,6 +16,9 @@ from unkork.scoring import score_voice_mel
 from unkork.synthesis import PHRASES, get_pipeline, synthesize_phrases
 from unkork.tensors import flatten, unflatten
 
+# Type for scoring functions: (generated_paths, reference_paths) -> score
+ScorerFn = Callable[[list[str], list[str]], float]
+
 
 def refine_tensor(
     start_tensor: torch.Tensor,
@@ -24,12 +28,9 @@ def refine_tensor(
     max_iterations: int = 50,
     popsize: int = 8,
     sigma0: float = 0.5,
+    scorer: ScorerFn | None = None,
 ) -> tuple[torch.Tensor, float]:
     """Refine a voice tensor toward target audio using CMA-ES in PCA space.
-
-    Scores candidates by mel-spectrogram distance against reference audio,
-    capturing timbre, resonance, and spectral envelope — not just speaker
-    identity.
 
     Args:
         start_tensor: Starting voice tensor (e.g., from MLP prediction).
@@ -41,11 +42,14 @@ def refine_tensor(
         max_iterations: Maximum CMA-ES generations.
         popsize: Population size per generation.
         sigma0: Initial step size in PCA space.
+        scorer: Scoring function (generated_paths, reference_paths) -> float.
+            Higher is better. Defaults to score_voice_mel.
 
     Returns:
         (refined_tensor, best_score)
     """
     pipeline = get_pipeline()
+    scorer = scorer or score_voice_mel
 
     phrases = phrases or PHRASES[: len(reference_audio_paths)]
     ref_paths = reference_audio_paths[: len(phrases)]
@@ -68,7 +72,7 @@ def refine_tensor(
             try:
                 paths = synthesize_phrases(tensor, tmpdir, phrases, pipeline)
                 gen_paths = [str(p) for p in paths]
-                score = score_voice_mel(gen_paths, ref_paths)
+                score = scorer(gen_paths, ref_paths)
             except Exception:
                 return 1.0  # worst possible (CMA-ES minimizes)
 

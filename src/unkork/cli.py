@@ -212,23 +212,45 @@ def predict(model: str, pca: str, audio: str, output: str):
 @click.option("--popsize", default=8, help="CMA-ES population size per generation")
 @click.option("--sigma", default=0.5, help="CMA-ES initial step size in PCA space")
 @click.option("--output", default="refined.pt", help="Output refined tensor path")
+@click.option(
+    "--scorer", default="composite",
+    type=click.Choice(["mel", "resemblyzer", "composite"]),
+    help="Scoring function: mel (timbre), resemblyzer (identity), composite (both)",
+)
+@click.option(
+    "--mel-weight", default=0.5, type=float,
+    help="Mel-spec weight in composite scorer (0-1). Resemblyzer gets the rest.",
+)
 def refine(
     start: str, reference_dir: str, pca: str, iterations: int,
-    popsize: int, sigma: float, output: str,
+    popsize: int, sigma: float, output: str, scorer: str, mel_weight: float,
 ):
-    """Refine a voice tensor using mel-spectrogram comparison.
+    """Refine a voice tensor toward target audio using CMA-ES optimization.
 
-    Compares synthesized audio against reference wav files (e.g., from
-    Qwen3-TTS) using mel-spectrogram distance. This captures timbre,
-    resonance, and spectral envelope — not just speaker identity.
+    Supports three scoring modes:
 
-    Reference wav files should contain the standard test phrases, one per
-    file, sorted alphabetically. Generate them with the target voice
-    (e.g., via Qwen3-TTS clone endpoint).
+    \b
+      mel        — Mel-spectrogram distance only (timbre, resonance, spectral envelope)
+      resemblyzer — Resemblyzer speaker similarity only (identity, dialect)
+      composite  — Weighted harmonic mean of both (default)
+
+    For composite mode, --mel-weight controls the balance. Higher values
+    prioritize timbral match; lower values anchor dialect/identity.
     """
+    from functools import partial
+
     from unkork.pca import load as load_pca
     from unkork.refinement import refine_tensor
+    from unkork.scoring import score_voice_composite, score_voice_mel, score_voice_resemblyzer
     from unkork.tensors import load_voice, save_voice
+
+    # Build scoring function
+    scorers = {
+        "mel": score_voice_mel,
+        "resemblyzer": score_voice_resemblyzer,
+        "composite": partial(score_voice_composite, mel_weight=mel_weight),
+    }
+    score_fn = scorers[scorer]
 
     click.echo(f"Loading starting tensor from {start}...")
     start_tensor = load_voice(start)
@@ -242,10 +264,15 @@ def refine(
         raise click.ClickException(f"No .wav files found in {reference_dir}")
     click.echo(f"Found {len(ref_paths)} reference audio files")
 
+    scorer_desc = scorer
+    if scorer == "composite":
+        scorer_desc = f"composite (mel={mel_weight:.1f}, resemblyzer={1-mel_weight:.1f})"
+    click.echo(f"Scorer: {scorer_desc}")
     click.echo(f"Refining ({iterations} iterations, pop={popsize})...")
     refined, score = refine_tensor(
         start_tensor, ref_paths, pca_transform,
         max_iterations=iterations, popsize=popsize, sigma0=sigma,
+        scorer=score_fn,
     )
 
     save_voice(refined, output)

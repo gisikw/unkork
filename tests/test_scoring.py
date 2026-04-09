@@ -50,6 +50,32 @@ def test_harmonic_mean_empty_returns_zero():
     assert harmonic_mean([]) == 0.0
 
 
+def test_harmonic_mean_weighted_equal_weights():
+    """Equal weights should match unweighted."""
+    vals = [0.3, 0.7]
+    unweighted = harmonic_mean(vals)
+    weighted = harmonic_mean(vals, weights=[1.0, 1.0])
+    assert abs(unweighted - weighted) < 1e-7
+
+
+def test_harmonic_mean_weighted_skews_toward_weight():
+    """Heavier weight on a value pulls the mean toward it."""
+    vals = [0.2, 0.8]
+    heavy_first = harmonic_mean(vals, weights=[0.9, 0.1])
+    heavy_second = harmonic_mean(vals, weights=[0.1, 0.9])
+    # Heavier weight on 0.8 should produce higher mean
+    assert heavy_second > heavy_first
+
+
+def test_harmonic_mean_weighted_single_weight():
+    """With all weight on one value, result equals that value."""
+    vals = [0.3, 0.9]
+    result = harmonic_mean(vals, weights=[1.0, 0.0])
+    # w_sum / (w1/v1 + 0) = 1.0 / (1/0.3) = 0.3
+    # But wait — weight of 0 makes sum(w_i/v_i) = 1/0.3, so result = 1.0 / (1/0.3) = 0.3
+    assert abs(result - 0.3) < 1e-7
+
+
 def test_mel_spectrogram_shape():
     """Mel-spectrogram of a sine wave has correct shape."""
     sr = 24000

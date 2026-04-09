@@ -15,11 +15,22 @@ def cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
     return float(dot / norm)
 
 
-def harmonic_mean(values: list[float]) -> float:
-    """Harmonic mean of positive values. Returns 0 if any value is <= 0."""
+def harmonic_mean(values: list[float], weights: list[float] | None = None) -> float:
+    """Weighted harmonic mean of positive values. Returns 0 if any value is <= 0.
+
+    When weights are provided: H_w = sum(w_i) / sum(w_i / v_i).
+    Without weights, falls back to standard harmonic mean.
+    """
     if not values or any(v <= 0 for v in values):
         return 0.0
-    return len(values) / sum(1.0 / v for v in values)
+    if weights is None:
+        return len(values) / sum(1.0 / v for v in values)
+    if len(weights) != len(values):
+        raise ValueError("weights must have same length as values")
+    w_sum = sum(weights)
+    if w_sum == 0:
+        return 0.0
+    return w_sum / sum(w / v for w, v in zip(weights, values))
 
 
 def mel_spectrogram(
@@ -121,3 +132,53 @@ def score_voice_mel(
 
     mean_dist = float(np.mean(distances))
     return 1.0 / (1.0 + mean_dist)
+
+
+def score_voice_resemblyzer(
+    generated_audio_paths: list[str],
+    reference_audio_paths: list[str],
+) -> float:
+    """Score generated audio against reference using Resemblyzer speaker similarity.
+
+    Extracts speaker embeddings from each pair, averages, then computes cosine
+    similarity. Good at preserving speaker identity / dialect but blind to
+    timbre, resonance, and spectral envelope.
+
+    Returns:
+        Score in [-1, 1], typically (0, 1]. Higher is better.
+    """
+    from unkork.embeddings import embed_voice_samples
+
+    if not generated_audio_paths or not reference_audio_paths:
+        return 0.0
+
+    n = min(len(generated_audio_paths), len(reference_audio_paths))
+    gen_emb = embed_voice_samples(generated_audio_paths[:n])
+    ref_emb = embed_voice_samples(reference_audio_paths[:n])
+    return cosine_similarity(gen_emb, ref_emb)
+
+
+def score_voice_composite(
+    generated_audio_paths: list[str],
+    reference_audio_paths: list[str],
+    mel_weight: float = 0.5,
+) -> float:
+    """Composite score: weighted harmonic mean of mel-spec + Resemblyzer.
+
+    Mel-spectrogram distance captures timbre, resonance, spectral envelope.
+    Resemblyzer similarity anchors speaker identity and prevents dialect drift.
+    Weighted harmonic mean ensures neither component can be near-zero without
+    tanking the composite.
+
+    Args:
+        mel_weight: Weight for mel-spectrogram score. Resemblyzer gets (1 - mel_weight).
+            Higher values prioritize timbral match; lower values prioritize identity anchor.
+
+    Returns:
+        Score in (0, 1]. Higher is better.
+    """
+    mel_score = score_voice_mel(generated_audio_paths, reference_audio_paths)
+    resem_score = score_voice_resemblyzer(generated_audio_paths, reference_audio_paths)
+
+    resem_weight = 1.0 - mel_weight
+    return harmonic_mean([mel_score, resem_score], weights=[mel_weight, resem_weight])
