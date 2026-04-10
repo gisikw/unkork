@@ -121,6 +121,9 @@ def build_tts_request(
     }
 
 
+MIN_CLIP_BYTES = 10_000  # ~200ms at 24kHz 16-bit mono; anything smaller is suspect
+
+
 def generate_clip(
     tts_url: str,
     text: str,
@@ -129,8 +132,13 @@ def generate_clip(
     output_path: Path,
     instructions: dict[str, str] | None = None,
     timeout: int = 60,
+    verify_ssl: bool = True,
 ) -> Path:
-    """Call Qwen3-TTS and write audio to output_path."""
+    """Call Qwen3-TTS and write audio to output_path.
+
+    Validates response content-type and minimum size to catch error pages
+    or truncated responses being saved as .wav files.
+    """
     import requests
 
     body = build_tts_request(text, mood, voice, instructions)
@@ -138,10 +146,22 @@ def generate_clip(
         f"{tts_url.rstrip('/')}/v1/audio/speech",
         json=body,
         timeout=timeout,
+        verify=verify_ssl,
     )
     if resp.status_code != 200:
         raise RuntimeError(
-            f"TTS request failed ({resp.status_code}): {resp.text[:200]}"
+            f"TTS request failed ({resp.status_code}): {resp.text[:500]}"
+        )
+    content_type = resp.headers.get("content-type", "")
+    if "audio" not in content_type and "octet-stream" not in content_type:
+        raise RuntimeError(
+            f"TTS returned non-audio content-type {content_type!r}: {resp.text[:500]}"
+        )
+    if len(resp.content) < MIN_CLIP_BYTES:
+        raise RuntimeError(
+            f"TTS returned suspiciously small response ({len(resp.content)} bytes, "
+            f"expected >={MIN_CLIP_BYTES}). Content-type: {content_type}. "
+            f"First 200 bytes: {resp.content[:200]!r}"
         )
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_bytes(resp.content)
@@ -156,6 +176,7 @@ def generate_clips(
     sentences: list[str],
     instructions: dict[str, str] | None = None,
     timeout: int = 60,
+    verify_ssl: bool = True,
     on_progress: Callable[[int, int], None] | None = None,
 ) -> list[ClipRecord]:
     """Generate the full clip matrix and write manifest.json.
@@ -174,6 +195,7 @@ def generate_clips(
                     generate_clip(
                         tts_url, sentence, mood, voice, clip_path,
                         instructions=instructions, timeout=timeout,
+                        verify_ssl=verify_ssl,
                     )
                 records.append(ClipRecord(
                     path=str(clip_path),

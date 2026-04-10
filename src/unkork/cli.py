@@ -350,9 +350,13 @@ def mood_map():
     "--moods", default="sultry,assertive,tender,irritable,playful,neutral",
     help="Comma-separated mood list",
 )
-@click.option("--voices", default="ryan,aiden", help="Comma-separated Qwen3-TTS voice list")
+@click.option("--voices", default="Ryan,Aiden", help="Comma-separated Qwen3-TTS voice list")
 @click.option("--timeout", default=60, type=int, help="HTTP timeout per request (seconds)")
-def mood_map_generate(tts_url: str, output: str, moods: str, voices: str, timeout: int):
+@click.option("--no-verify-ssl", is_flag=True, help="Skip SSL certificate verification")
+def mood_map_generate(
+    tts_url: str, output: str, moods: str, voices: str,
+    timeout: int, no_verify_ssl: bool,
+):
     """Generate mood-conditioned audio clips via Qwen3-TTS.
 
     Calls POST /v1/audio/speech with per-mood instruction strings.
@@ -371,18 +375,21 @@ def mood_map_generate(tts_url: str, output: str, moods: str, voices: str, timeou
     output_dir = Path(output)
     mood_list = [m.strip() for m in moods.split(",")]
     voice_list = [v.strip() for v in voices.split(",")]
+    verify_ssl = not no_verify_ssl
 
     total = len(mood_list) * len(voice_list) * len(SENTENCES)
     click.echo(f"Generating {total} clips: {len(mood_list)} moods × {len(voice_list)} voices × {len(SENTENCES)} sentences")
     click.echo(f"TTS: {tts_url}")
     click.echo(f"Output: {output_dir}")
+    if not verify_ssl:
+        click.echo("SSL verification: disabled")
 
     def on_progress(done: int, total: int) -> None:
         click.echo(f"  [{done}/{total}] clips", nl=(done == total))
 
     records = generate_clips(
         tts_url, output_dir, mood_list, voice_list, SENTENCES,
-        timeout=timeout, on_progress=on_progress,
+        timeout=timeout, verify_ssl=verify_ssl, on_progress=on_progress,
     )
     click.echo(f"Done. {len(records)} clips, manifest at {output_dir / 'manifest.json'}")
 
