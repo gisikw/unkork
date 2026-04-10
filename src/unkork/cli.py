@@ -327,3 +327,159 @@ def speak(voice: str, text: str, output: str):
     click.echo(f"Synthesizing: {text!r}")
     synthesize_voice(tensor, text, output, get_pipeline())
     click.echo(f"Wrote {output}")
+
+
+# ---------------------------------------------------------------------------
+# mood-map experiment
+# ---------------------------------------------------------------------------
+
+
+@main.group("mood-map")
+def mood_map():
+    """Mood mapping experiment: does emotional style separate in feature space?"""
+    pass
+
+
+@mood_map.command("generate")
+@click.option(
+    "--tts-url", default="http://localhost:8880",
+    help="Base URL for Qwen3-TTS (POST /v1/audio/speech)",
+)
+@click.option("--output", required=True, help="Directory for audio clips + manifest.json")
+@click.option(
+    "--moods", default="sultry,assertive,tender,irritable,playful,neutral",
+    help="Comma-separated mood list",
+)
+@click.option("--voices", default="ryan,aiden", help="Comma-separated Qwen3-TTS voice list")
+@click.option("--timeout", default=60, type=int, help="HTTP timeout per request (seconds)")
+def mood_map_generate(tts_url: str, output: str, moods: str, voices: str, timeout: int):
+    """Generate mood-conditioned audio clips via Qwen3-TTS.
+
+    Calls POST /v1/audio/speech with per-mood instruction strings.
+    Writes one wav per (mood, voice, sentence) plus manifest.json.
+
+    \b
+    Idempotent: skips clips that already exist on disk.
+
+    \b
+    Container networking — TTS is typically on the host at localhost:8880.
+    Either run with --network=host or use the bridge gateway IP:
+        unkork mood-map generate --tts-url http://10.88.0.1:8880 --output /data/mood-clips
+    """
+    from unkork.mood_map import SENTENCES, generate_clips
+
+    output_dir = Path(output)
+    mood_list = [m.strip() for m in moods.split(",")]
+    voice_list = [v.strip() for v in voices.split(",")]
+
+    total = len(mood_list) * len(voice_list) * len(SENTENCES)
+    click.echo(f"Generating {total} clips: {len(mood_list)} moods × {len(voice_list)} voices × {len(SENTENCES)} sentences")
+    click.echo(f"TTS: {tts_url}")
+    click.echo(f"Output: {output_dir}")
+
+    def on_progress(done: int, total: int) -> None:
+        click.echo(f"  [{done}/{total}] clips", nl=(done == total))
+
+    records = generate_clips(
+        tts_url, output_dir, mood_list, voice_list, SENTENCES,
+        timeout=timeout, on_progress=on_progress,
+    )
+    click.echo(f"Done. {len(records)} clips, manifest at {output_dir / 'manifest.json'}")
+
+
+@mood_map.command("analyze")
+@click.option("--clips", required=True, help="Directory with clips + manifest.json")
+@click.option("--output", required=True, help="Directory for PNG plots + report.txt")
+@click.option(
+    "--feature-sets", default="resemblyzer,spectral,combined,f0",
+    help="Comma-separated feature sets to analyze",
+)
+@click.option("--tsne-perplexity", default=30.0, type=float, help="t-SNE perplexity (5-50)")
+@click.option("--n-variance-components", default=10, type=int, help="PCA components for scree plot")
+def mood_map_analyze(
+    clips: str, output: str, feature_sets: str,
+    tsne_perplexity: float, n_variance_components: int,
+):
+    """Analyze mood separation in acoustic feature spaces.
+
+    Reads manifest.json from --clips, extracts features per clip,
+    runs PCA and t-SNE, computes silhouette scores, writes PNG plots
+    and a numeric report to --output.
+    """
+    from unkork.embeddings import get_encoder
+    from unkork.mood_map import (
+        FeatureAnalysis,
+        analyze_feature_set,
+        load_manifest,
+        plot_explained_variance,
+        plot_scatter,
+        write_report,
+    )
+
+    clips_dir = Path(clips)
+    output_dir = Path(output)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    manifest_path = clips_dir / "manifest.json"
+    if not manifest_path.exists():
+        raise click.ClickException(f"No manifest.json found in {clips_dir}")
+
+    records = load_manifest(manifest_path)
+    click.echo(f"Loaded {len(records)} clips from manifest")
+
+    fs_list = [f.strip() for f in feature_sets.split(",")]
+
+    # Load encoder once for feature sets that need it
+    encoder = None
+    if any(fs in ("resemblyzer", "combined") for fs in fs_list):
+        click.echo("Loading Resemblyzer encoder...")
+        encoder = get_encoder()
+
+    analyses: list[FeatureAnalysis] = []
+    for fs in fs_list:
+        click.echo(f"\nAnalyzing: {fs}")
+
+        def on_progress(done: int, total: int) -> None:
+            if done % 50 == 0 or done == total:
+                click.echo(f"  Extracting features: {done}/{total}")
+
+        analysis = analyze_feature_set(
+            records, fs,
+            tsne_perplexity=tsne_perplexity,
+            n_variance_components=n_variance_components,
+            encoder=encoder,
+            on_progress=on_progress,
+        )
+        analyses.append(analysis)
+
+        click.echo(f"  Silhouette score: {analysis.silhouette:.4f}")
+
+        plot_scatter(
+            analysis.pca_2d, analysis.labels, analysis.voices,
+            f"PCA — {fs} (silhouette={analysis.silhouette:.3f})",
+            output_dir / f"pca_{fs}.png",
+        )
+        plot_scatter(
+            analysis.tsne_2d, analysis.labels, analysis.voices,
+            f"t-SNE — {fs} (silhouette={analysis.silhouette:.3f})",
+            output_dir / f"tsne_{fs}.png",
+        )
+        plot_explained_variance(
+            analysis.explained_variance, fs,
+            output_dir / f"variance_{fs}.png",
+        )
+        click.echo(f"  Wrote plots to {output_dir}")
+
+    report_path = output_dir / "report.txt"
+    write_report(analyses, report_path)
+    click.echo(f"\nReport: {report_path}")
+
+    # Summary
+    click.echo("\n" + "=" * 50)
+    click.echo("RESULTS SUMMARY")
+    click.echo("=" * 50)
+    for a in analyses:
+        click.echo(f"  {a.feature_set:<15} silhouette = {a.silhouette:+.4f}")
+    click.echo("")
+    best = max(analyses, key=lambda a: a.silhouette)
+    click.echo(f"Best separation: {best.feature_set} ({best.silhouette:+.4f})")

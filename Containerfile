@@ -22,7 +22,8 @@ ENV PIP_CACHE_DIR=/data/cache/pip
 COPY pyproject.toml /app/
 RUN pip install --no-cache-dir \
     torch numpy scipy resemblyzer cma soundfile librosa click \
-    kokoro kokoro-onnx
+    kokoro kokoro-onnx \
+    requests scikit-learn matplotlib
 
 # Pre-install spacy model so Kokoro doesn't pip-install it at runtime.
 RUN python3 -m spacy download en_core_web_sm 2>/dev/null
