@@ -468,19 +468,27 @@ def mood_map_ingest(source: str, output: str, download: bool):
 @click.option("--output", required=True, help="Directory for PNG plots + report.txt")
 @click.option(
     "--feature-sets", default="resemblyzer,spectral,combined,f0",
-    help="Comma-separated feature sets to analyze",
+    help="Comma-separated feature sets (resemblyzer,spectral,combined,f0,tensor)",
 )
 @click.option("--tsne-perplexity", default=30.0, type=float, help="t-SNE perplexity (5-50)")
 @click.option("--n-variance-components", default=10, type=int, help="PCA components for scree plot")
+@click.option("--model", default=None, help="Trained codec model (.pt) — required for tensor feature set")
+@click.option("--pca", "pca_path", default=None, help="PCA transform (.npz) — required for tensor feature set")
 def mood_map_analyze(
     clips: str, output: str, feature_sets: str,
     tsne_perplexity: float, n_variance_components: int,
+    model: str | None, pca_path: str | None,
 ):
     """Analyze mood separation in acoustic feature spaces.
 
     Reads manifest.json from --clips, extracts features per clip,
     runs PCA and t-SNE, computes silhouette scores, writes PNG plots
     and a numeric report to --output.
+
+    \b
+    Use --feature-sets=tensor with --model and --pca to analyze
+    predicted Kokoro voice tensors — the real test of whether mood
+    is encoded in Kokoro's latent space.
     """
     from unkork.embeddings import get_encoder
     from unkork.mood_map import (
@@ -505,11 +513,29 @@ def mood_map_analyze(
 
     fs_list = [f.strip() for f in feature_sets.split(",")]
 
+    # Validate tensor requirements
+    if "tensor" in fs_list:
+        if not model or not pca_path:
+            raise click.ClickException("--model and --pca are required for tensor feature set")
+
     # Load encoder once for feature sets that need it
     encoder = None
-    if any(fs in ("resemblyzer", "combined") for fs in fs_list):
+    if any(fs in ("resemblyzer", "combined", "tensor") for fs in fs_list):
         click.echo("Loading Resemblyzer encoder...")
         encoder = get_encoder()
+
+    # Load model/PCA if needed for tensor analysis
+    codec = None
+    pca_transform = None
+    if "tensor" in fs_list:
+        from unkork.model import load_checkpoint
+        from unkork.pca import load as load_pca
+
+        click.echo(f"Loading codec from {model}...")
+        codec, metadata = load_checkpoint(model)
+        codec.eval()
+        click.echo(f"Loading PCA from {pca_path}...")
+        pca_transform = load_pca(pca_path)
 
     analyses: list[FeatureAnalysis] = []
     for fs in fs_list:
@@ -525,6 +551,8 @@ def mood_map_analyze(
             n_variance_components=n_variance_components,
             encoder=encoder,
             on_progress=on_progress,
+            codec=codec,
+            pca_transform=pca_transform,
         )
         analyses.append(analysis)
 

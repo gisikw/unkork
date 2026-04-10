@@ -321,11 +321,41 @@ def ingest_ravdess(
 # ---------------------------------------------------------------------------
 
 
+def predict_tensor_for_clip(
+    audio_path: str,
+    codec,
+    pca_transform,
+    encoder=None,
+) -> np.ndarray:
+    """Run the full predict pipeline for one clip. Returns flat voice tensor."""
+    import torch
+
+    from unkork.embeddings import extract_embedding
+    from unkork.features import extract_spectral_features
+    from unkork.pca import inverse_transform
+
+    resem = extract_embedding(audio_path, encoder)
+    spectral = extract_spectral_features(audio_path)
+    features = np.concatenate([resem, spectral])
+
+    with torch.no_grad():
+        x = torch.tensor(features, dtype=torch.float32).unsqueeze(0)
+        pca_pred = codec(x).squeeze(0).numpy()
+
+    flat = inverse_transform(pca_transform, pca_pred)
+    return flat.astype(np.float32)
+
+
+VALID_FEATURE_SETS = ("resemblyzer", "spectral", "combined", "f0", "tensor")
+
+
 def extract_features_for_clips(
     records: list[ClipRecord],
     feature_set: str,
     encoder=None,
     on_progress: Callable[[int, int], None] | None = None,
+    codec=None,
+    pca_transform=None,
 ) -> tuple[np.ndarray, list[ClipRecord]]:
     """Extract features for all clips, skipping those that fail.
 
@@ -333,18 +363,23 @@ def extract_features_for_clips(
     (n_valid, feature_dim) and valid_records are the corresponding ClipRecords.
     Clips that are too short or produce degenerate features are skipped.
 
-    feature_set: "resemblyzer" | "spectral" | "combined" | "f0"
+    feature_set: "resemblyzer" | "spectral" | "combined" | "f0" | "tensor"
     encoder: optional pre-loaded VoiceEncoder (avoids reloading per call)
+    codec: required for "tensor" — loaded VoiceCodec model
+    pca_transform: required for "tensor" — loaded PCA transform
     """
     import warnings
 
     from unkork.embeddings import extract_embedding, get_encoder
     from unkork.features import extract_f0_features, extract_spectral_features
 
-    if feature_set not in ("resemblyzer", "spectral", "combined", "f0"):
+    if feature_set not in VALID_FEATURE_SETS:
         raise ValueError(f"Unknown feature_set {feature_set!r}")
 
-    if feature_set in ("resemblyzer", "combined") and encoder is None:
+    if feature_set == "tensor" and (codec is None or pca_transform is None):
+        raise ValueError("feature_set='tensor' requires codec and pca_transform")
+
+    if feature_set in ("resemblyzer", "combined", "tensor") and encoder is None:
         encoder = get_encoder()
 
     features = []
@@ -365,6 +400,10 @@ def extract_features_for_clips(
                     resem = extract_embedding(rec.path, encoder)
                     spectral = extract_spectral_features(rec.path)
                     vec = np.concatenate([resem, spectral])
+                elif feature_set == "tensor":
+                    vec = predict_tensor_for_clip(
+                        rec.path, codec, pca_transform, encoder,
+                    )
             if vec.ndim != 1 or np.any(np.isnan(vec)):
                 skipped += 1
                 continue
@@ -437,10 +476,13 @@ def analyze_feature_set(
     n_variance_components: int = 10,
     encoder=None,
     on_progress: Callable[[int, int], None] | None = None,
+    codec=None,
+    pca_transform=None,
 ) -> FeatureAnalysis:
     """Run full analysis pipeline for one feature set."""
     features, valid_records = extract_features_for_clips(
         records, feature_set, encoder=encoder, on_progress=on_progress,
+        codec=codec, pca_transform=pca_transform,
     )
     labels = [r.mood for r in valid_records]
     pca_2d, _ = fit_pca_2d(features)
