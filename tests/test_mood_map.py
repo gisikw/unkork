@@ -10,8 +10,10 @@ from unkork.cli import main
 from unkork.mood_map import (
     MOODS,
     MOOD_INSTRUCTIONS,
+    RAVDESS_EMOTIONS,
     SENTENCES,
     ClipRecord,
+    FeatureAnalysis,
     build_tts_request,
     compute_silhouette,
     explained_variance_report,
@@ -19,9 +21,9 @@ from unkork.mood_map import (
     fit_tsne_2d,
     load_manifest,
     mood_instruction,
+    parse_ravdess_filename,
     save_manifest,
     write_report,
-    FeatureAnalysis,
 )
 
 
@@ -98,6 +100,46 @@ def test_manifest_json_format(tmp_path):
     data = json.loads(manifest_path.read_text())
     assert isinstance(data, list)
     assert data[0]["mood"] == "neutral"
+
+
+# ---------------------------------------------------------------------------
+# RAVDESS parsing
+# ---------------------------------------------------------------------------
+
+
+def test_parse_ravdess_valid():
+    """Standard RAVDESS filename parses correctly."""
+    result = parse_ravdess_filename("03-01-05-02-01-01-12.wav")
+    assert result is not None
+    assert result["emotion"] == "angry"
+    assert result["intensity"] == "strong"
+    assert result["actor"] == "12"
+    assert result["gender"] == "female"
+    assert result["statement"] == "01"
+
+
+def test_parse_ravdess_all_emotions():
+    """All 8 RAVDESS emotion codes parse."""
+    for code, name in RAVDESS_EMOTIONS.items():
+        fname = f"03-01-{code}-01-01-01-01.wav"
+        result = parse_ravdess_filename(fname)
+        assert result is not None
+        assert result["emotion"] == name
+
+
+def test_parse_ravdess_male_female():
+    """Odd actors are male, even are female."""
+    male = parse_ravdess_filename("03-01-01-01-01-01-03.wav")
+    female = parse_ravdess_filename("03-01-01-01-01-01-04.wav")
+    assert male["gender"] == "male"
+    assert female["gender"] == "female"
+
+
+def test_parse_ravdess_invalid():
+    """Non-RAVDESS filenames return None."""
+    assert parse_ravdess_filename("random_file.wav") is None
+    assert parse_ravdess_filename("01-02-03.wav") is None
+    assert parse_ravdess_filename("03-01-99-01-01-01-01.wav") is None
 
 
 # ---------------------------------------------------------------------------

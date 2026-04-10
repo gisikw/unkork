@@ -224,6 +224,99 @@ def load_manifest(path: Path) -> list[ClipRecord]:
 
 
 # ---------------------------------------------------------------------------
+# RAVDESS corpus ingestion
+# ---------------------------------------------------------------------------
+
+RAVDESS_EMOTIONS = {
+    "01": "neutral",
+    "02": "calm",
+    "03": "happy",
+    "04": "sad",
+    "05": "angry",
+    "06": "fearful",
+    "07": "disgust",
+    "08": "surprised",
+}
+
+RAVDESS_URL = (
+    "https://zenodo.org/records/1188976/files/"
+    "Audio_Speech_Actors_01-24.zip?download=1"
+)
+
+
+def parse_ravdess_filename(filename: str) -> dict[str, str] | None:
+    """Parse a RAVDESS filename into its components.
+
+    Filename format: {modality}-{vocal}-{emotion}-{intensity}-{statement}-{repetition}-{actor}.wav
+    Returns None if the filename doesn't match the expected pattern.
+    """
+    stem = Path(filename).stem
+    parts = stem.split("-")
+    if len(parts) != 7:
+        return None
+    modality, vocal, emotion, intensity, statement, repetition, actor = parts
+    if emotion not in RAVDESS_EMOTIONS:
+        return None
+    return {
+        "modality": modality,
+        "vocal": vocal,
+        "emotion": RAVDESS_EMOTIONS[emotion],
+        "emotion_code": emotion,
+        "intensity": "strong" if intensity == "02" else "normal",
+        "statement": statement,
+        "repetition": repetition,
+        "actor": actor,
+        "gender": "male" if int(actor) % 2 == 1 else "female",
+    }
+
+
+def ingest_ravdess(
+    ravdess_dir: Path,
+    output_dir: Path,
+) -> list[ClipRecord]:
+    """Ingest RAVDESS speech audio into a mood-map manifest.
+
+    Scans ravdess_dir recursively for .wav files matching RAVDESS naming,
+    copies them into output_dir organized by emotion, and writes manifest.json.
+    """
+    import shutil
+
+    wav_files = sorted(ravdess_dir.rglob("*.wav"))
+    if not wav_files:
+        raise ValueError(f"No .wav files found in {ravdess_dir}")
+
+    records: list[ClipRecord] = []
+    for wav in wav_files:
+        parsed = parse_ravdess_filename(wav.name)
+        if parsed is None:
+            continue
+        # Only speech (vocal=01), skip song
+        if parsed["vocal"] != "01":
+            continue
+
+        mood = parsed["emotion"]
+        voice = f"actor{parsed['actor']}_{parsed['gender']}"
+        stmt = int(parsed["statement"]) - 1
+        rep = int(parsed["repetition"]) - 1
+        sentence_idx = stmt * 2 + rep
+
+        dest = output_dir / mood / wav.name
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        if not dest.exists():
+            shutil.copy2(wav, dest)
+
+        records.append(ClipRecord(
+            path=str(dest),
+            mood=mood,
+            voice=voice,
+            sentence_idx=sentence_idx,
+        ))
+
+    save_manifest(records, output_dir / "manifest.json")
+    return records
+
+
+# ---------------------------------------------------------------------------
 # Feature extraction
 # ---------------------------------------------------------------------------
 

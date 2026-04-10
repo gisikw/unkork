@@ -394,6 +394,75 @@ def mood_map_generate(
     click.echo(f"Done. {len(records)} clips, manifest at {output_dir / 'manifest.json'}")
 
 
+@mood_map.command("ingest")
+@click.option("--source", required=True, help="Directory containing RAVDESS .wav files (recursive)")
+@click.option("--output", required=True, help="Directory for organized clips + manifest.json")
+@click.option(
+    "--download", is_flag=True,
+    help="Download RAVDESS speech audio from Zenodo first (208MB zip)",
+)
+def mood_map_ingest(source: str, output: str, download: bool):
+    """Ingest RAVDESS emotional speech corpus for mood analysis.
+
+    Parses RAVDESS filenames to extract emotion labels, copies clips
+    organized by emotion, and writes manifest.json for the analyze step.
+
+    \b
+    RAVDESS provides 24 actors × 8 emotions × 2 statements × 2 intensities.
+    Emotions: neutral, calm, happy, sad, angry, fearful, disgust, surprised.
+
+    \b
+    To download and ingest in one step:
+        unkork mood-map ingest --download --source /data/ravdess-raw --output /data/ravdess-clips
+    """
+    import zipfile
+
+    from unkork.mood_map import RAVDESS_URL, ingest_ravdess
+
+    source_dir = Path(source)
+    output_dir = Path(output)
+
+    if download:
+        import requests
+
+        source_dir.mkdir(parents=True, exist_ok=True)
+        zip_path = source_dir / "Audio_Speech_Actors_01-24.zip"
+        if not zip_path.exists():
+            click.echo(f"Downloading RAVDESS speech audio (208MB)...")
+            click.echo(f"  URL: {RAVDESS_URL}")
+            resp = requests.get(RAVDESS_URL, stream=True, timeout=300)
+            resp.raise_for_status()
+            total_size = int(resp.headers.get("content-length", 0))
+            downloaded = 0
+            with open(zip_path, "wb") as f:
+                for chunk in resp.iter_content(chunk_size=8192):
+                    f.write(chunk)
+                    downloaded += len(chunk)
+                    if total_size and downloaded % (1024 * 1024) < 8192:
+                        pct = downloaded * 100 // total_size
+                        click.echo(f"  {downloaded // (1024*1024)}MB / {total_size // (1024*1024)}MB ({pct}%)")
+            click.echo(f"  Saved to {zip_path}")
+        else:
+            click.echo(f"Using existing download: {zip_path}")
+
+        click.echo("Extracting...")
+        with zipfile.ZipFile(zip_path) as zf:
+            zf.extractall(source_dir)
+        click.echo(f"Extracted to {source_dir}")
+
+    if not source_dir.exists():
+        raise click.ClickException(f"Source directory not found: {source_dir}")
+
+    click.echo(f"Ingesting RAVDESS clips from {source_dir}...")
+    records = ingest_ravdess(source_dir, output_dir)
+
+    # Summarize
+    moods = set(r.mood for r in records)
+    voices = set(r.voice for r in records)
+    click.echo(f"Done. {len(records)} clips, {len(moods)} emotions, {len(voices)} actors")
+    click.echo(f"Manifest: {output_dir / 'manifest.json'}")
+
+
 @mood_map.command("analyze")
 @click.option("--clips", required=True, help="Directory with clips + manifest.json")
 @click.option("--output", required=True, help="Directory for PNG plots + report.txt")
