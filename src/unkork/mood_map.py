@@ -326,12 +326,18 @@ def extract_features_for_clips(
     feature_set: str,
     encoder=None,
     on_progress: Callable[[int, int], None] | None = None,
-) -> np.ndarray:
-    """Extract features for all clips. Returns (n_clips, feature_dim) array.
+) -> tuple[np.ndarray, list[ClipRecord]]:
+    """Extract features for all clips, skipping those that fail.
+
+    Returns (features_array, valid_records) where features_array is
+    (n_valid, feature_dim) and valid_records are the corresponding ClipRecords.
+    Clips that are too short or produce degenerate features are skipped.
 
     feature_set: "resemblyzer" | "spectral" | "combined" | "f0"
     encoder: optional pre-loaded VoiceEncoder (avoids reloading per call)
     """
+    import warnings
+
     from unkork.embeddings import extract_embedding, get_encoder
     from unkork.features import extract_f0_features, extract_spectral_features
 
@@ -342,23 +348,40 @@ def extract_features_for_clips(
         encoder = get_encoder()
 
     features = []
+    valid_records: list[ClipRecord] = []
+    skipped = 0
     total = len(records)
     for i, rec in enumerate(records):
-        if feature_set == "resemblyzer":
-            vec = extract_embedding(rec.path, encoder)
-        elif feature_set == "spectral":
-            vec = extract_spectral_features(rec.path)
-        elif feature_set == "f0":
-            vec = extract_f0_features(rec.path)
-        elif feature_set == "combined":
-            resem = extract_embedding(rec.path, encoder)
-            spectral = extract_spectral_features(rec.path)
-            vec = np.concatenate([resem, spectral])
-        features.append(vec)
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", UserWarning)
+                if feature_set == "resemblyzer":
+                    vec = extract_embedding(rec.path, encoder)
+                elif feature_set == "spectral":
+                    vec = extract_spectral_features(rec.path)
+                elif feature_set == "f0":
+                    vec = extract_f0_features(rec.path)
+                elif feature_set == "combined":
+                    resem = extract_embedding(rec.path, encoder)
+                    spectral = extract_spectral_features(rec.path)
+                    vec = np.concatenate([resem, spectral])
+            if vec.ndim != 1 or np.any(np.isnan(vec)):
+                skipped += 1
+                continue
+            features.append(vec)
+            valid_records.append(rec)
+        except (ValueError, RuntimeError):
+            skipped += 1
+            continue
         if on_progress:
             on_progress(i + 1, total)
 
-    return np.stack(features).astype(np.float32)
+    if skipped:
+        import sys
+
+        print(f"  Skipped {skipped}/{total} clips (too short or degenerate)", file=sys.stderr)
+
+    return np.stack(features).astype(np.float32), valid_records
 
 
 # ---------------------------------------------------------------------------
@@ -416,12 +439,12 @@ def analyze_feature_set(
     on_progress: Callable[[int, int], None] | None = None,
 ) -> FeatureAnalysis:
     """Run full analysis pipeline for one feature set."""
-    features = extract_features_for_clips(
+    features, valid_records = extract_features_for_clips(
         records, feature_set, encoder=encoder, on_progress=on_progress,
     )
+    labels = [r.mood for r in valid_records]
     pca_2d, _ = fit_pca_2d(features)
     tsne_2d = fit_tsne_2d(features, perplexity=tsne_perplexity)
-    labels = [r.mood for r in records]
     sil = compute_silhouette(features, labels)
     ev = explained_variance_report(features, n_variance_components)
 
@@ -432,7 +455,7 @@ def analyze_feature_set(
         silhouette=sil,
         explained_variance=ev,
         labels=labels,
-        voices=[r.voice for r in records],
+        voices=[r.voice for r in valid_records],
     )
 
 
