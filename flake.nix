@@ -51,9 +51,15 @@
               rm -rf "\$TMPDIR"
             fi
 
+            NETWORK_FLAG=""
+            if [ "\''${UNKORK_HOST_NETWORK:-}" = "1" ]; then
+              NETWORK_FLAG="--network=host"
+            fi
+
             exec podman run --rm -it \
               --device=nvidia.com/gpu=all \
               --shm-size=4g \
+              \$NETWORK_FLAG \
               -v /var/lib/unkork:/data:Z \
               -v /var/lib/fort/drops:/drops:ro \
               -v "\$(pwd):/work:Z" \
