@@ -88,6 +88,7 @@ class FeatureAnalysis:
     explained_variance: np.ndarray
     labels: list[str]
     voices: list[str]
+    silhouette_normalized: float | None = None  # speaker-centroid-subtracted
 
 
 # ---------------------------------------------------------------------------
@@ -459,6 +460,24 @@ def compute_silhouette(features: np.ndarray, labels: list[str]) -> float:
     return float(silhouette_score(features, labels, metric="cosine"))
 
 
+def normalize_by_speaker(
+    features: np.ndarray,
+    voices: list[str],
+) -> np.ndarray:
+    """Subtract each speaker's centroid from their clips.
+
+    Removes speaker-identity variance so that what remains is the
+    within-speaker offset (hopefully mood). Returns a copy.
+    """
+    result = features.copy()
+    unique_voices = set(voices)
+    for voice in unique_voices:
+        mask = np.array([v == voice for v in voices])
+        centroid = result[mask].mean(axis=0)
+        result[mask] -= centroid
+    return result
+
+
 def explained_variance_report(features: np.ndarray, n_components: int = 10) -> np.ndarray:
     """Fit PCA with n_components and return explained_variance_ratio array."""
     from sklearn.decomposition import PCA
@@ -485,10 +504,18 @@ def analyze_feature_set(
         codec=codec, pca_transform=pca_transform,
     )
     labels = [r.mood for r in valid_records]
+    voices = [r.voice for r in valid_records]
     pca_2d, _ = fit_pca_2d(features)
     tsne_2d = fit_tsne_2d(features, perplexity=tsne_perplexity)
     sil = compute_silhouette(features, labels)
     ev = explained_variance_report(features, n_variance_components)
+
+    # Speaker-normalized silhouette: subtract each speaker's centroid
+    # so we measure mood separation within speakers, not between them.
+    sil_norm = None
+    if len(set(voices)) > 1:
+        normed = normalize_by_speaker(features, voices)
+        sil_norm = compute_silhouette(normed, labels)
 
     return FeatureAnalysis(
         feature_set=feature_set,
@@ -497,7 +524,8 @@ def analyze_feature_set(
         silhouette=sil,
         explained_variance=ev,
         labels=labels,
-        voices=[r.voice for r in valid_records],
+        voices=voices,
+        silhouette_normalized=sil_norm,
     )
 
 
@@ -592,14 +620,29 @@ def plot_explained_variance(
 
 def write_report(analyses: list[FeatureAnalysis], output_path: Path) -> None:
     """Write a plain-text summary of silhouette scores and variance."""
+    has_normalized = any(a.silhouette_normalized is not None for a in analyses)
+
     lines = ["Mood Mapping Analysis Report", "=" * 40, ""]
-    lines.append(f"{'Feature Set':<20} {'Silhouette':>12} {'PC1 Var':>10} {'PC2 Var':>10}")
-    lines.append("-" * 55)
+    if has_normalized:
+        lines.append(f"{'Feature Set':<20} {'Silhouette':>12} {'Normalized':>12} {'PC1 Var':>10} {'PC2 Var':>10}")
+        lines.append("-" * 67)
+    else:
+        lines.append(f"{'Feature Set':<20} {'Silhouette':>12} {'PC1 Var':>10} {'PC2 Var':>10}")
+        lines.append("-" * 55)
     for a in analyses:
         pc1 = a.explained_variance[0] if len(a.explained_variance) > 0 else 0.0
         pc2 = a.explained_variance[1] if len(a.explained_variance) > 1 else 0.0
-        lines.append(f"{a.feature_set:<20} {a.silhouette:>12.4f} {pc1:>10.4f} {pc2:>10.4f}")
+        if has_normalized:
+            norm_str = f"{a.silhouette_normalized:>12.4f}" if a.silhouette_normalized is not None else f"{'n/a':>12}"
+            lines.append(f"{a.feature_set:<20} {a.silhouette:>12.4f} {norm_str} {pc1:>10.4f} {pc2:>10.4f}")
+        else:
+            lines.append(f"{a.feature_set:<20} {a.silhouette:>12.4f} {pc1:>10.4f} {pc2:>10.4f}")
     lines.append("")
+    if has_normalized:
+        lines.append("Silhouette columns:")
+        lines.append("  Silhouette  — raw (all speakers pooled)")
+        lines.append("  Normalized  — speaker-centroid-subtracted (mood signal only)")
+        lines.append("")
     lines.append("Silhouette score interpretation:")
     lines.append("  > 0.5  — strong clustering (mood clearly separates)")
     lines.append("  0.2-0.5 — moderate clustering (mood influence detectable)")

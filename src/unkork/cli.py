@@ -557,6 +557,8 @@ def mood_map_analyze(
         analyses.append(analysis)
 
         click.echo(f"  Silhouette score: {analysis.silhouette:.4f}")
+        if analysis.silhouette_normalized is not None:
+            click.echo(f"  Silhouette (speaker-normalized): {analysis.silhouette_normalized:.4f}")
 
         plot_scatter(
             analysis.pca_2d, analysis.labels, analysis.voices,
@@ -582,8 +584,17 @@ def mood_map_analyze(
     click.echo("\n" + "=" * 50)
     click.echo("RESULTS SUMMARY")
     click.echo("=" * 50)
+    has_norm = any(a.silhouette_normalized is not None for a in analyses)
     for a in analyses:
-        click.echo(f"  {a.feature_set:<15} silhouette = {a.silhouette:+.4f}")
+        line = f"  {a.feature_set:<15} silhouette = {a.silhouette:+.4f}"
+        if has_norm and a.silhouette_normalized is not None:
+            line += f"  normalized = {a.silhouette_normalized:+.4f}"
+        click.echo(line)
     click.echo("")
-    best = max(analyses, key=lambda a: a.silhouette)
-    click.echo(f"Best separation: {best.feature_set} ({best.silhouette:+.4f})")
+    if has_norm:
+        best = max(analyses, key=lambda a: a.silhouette_normalized if a.silhouette_normalized is not None else a.silhouette)
+        score = best.silhouette_normalized if best.silhouette_normalized is not None else best.silhouette
+        click.echo(f"Best separation (normalized): {best.feature_set} ({score:+.4f})")
+    else:
+        best = max(analyses, key=lambda a: a.silhouette)
+        click.echo(f"Best separation: {best.feature_set} ({best.silhouette:+.4f})")

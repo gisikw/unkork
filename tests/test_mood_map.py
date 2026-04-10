@@ -21,6 +21,7 @@ from unkork.mood_map import (
     fit_tsne_2d,
     load_manifest,
     mood_instruction,
+    normalize_by_speaker,
     parse_ravdess_filename,
     save_manifest,
     write_report,
@@ -202,6 +203,60 @@ def test_explained_variance_report_caps_components():
     X = rng.standard_normal((60, 5)).astype(np.float32)
     ev = explained_variance_report(X, n_components=20)
     assert len(ev) == 5
+
+
+# ---------------------------------------------------------------------------
+# Speaker normalization
+# ---------------------------------------------------------------------------
+
+
+def test_normalize_by_speaker_subtracts_centroids():
+    """Each speaker's clips should be zero-mean after normalization."""
+    rng = np.random.default_rng(42)
+    # Two speakers at different locations in feature space
+    speaker_a = rng.standard_normal((10, 5)) + np.array([10, 0, 0, 0, 0])
+    speaker_b = rng.standard_normal((10, 5)) + np.array([0, 10, 0, 0, 0])
+    features = np.vstack([speaker_a, speaker_b]).astype(np.float32)
+    voices = ["alice"] * 10 + ["bob"] * 10
+
+    normed = normalize_by_speaker(features, voices)
+
+    # Each speaker's centroid should be ~zero
+    alice_mean = normed[:10].mean(axis=0)
+    bob_mean = normed[10:].mean(axis=0)
+    np.testing.assert_allclose(alice_mean, 0.0, atol=1e-5)
+    np.testing.assert_allclose(bob_mean, 0.0, atol=1e-5)
+
+
+def test_normalize_by_speaker_does_not_mutate():
+    """Normalization returns a copy, doesn't modify the input."""
+    rng = np.random.default_rng(42)
+    features = rng.standard_normal((20, 5)).astype(np.float32)
+    original = features.copy()
+    voices = ["a"] * 10 + ["b"] * 10
+    normalize_by_speaker(features, voices)
+    np.testing.assert_array_equal(features, original)
+
+
+def test_normalize_improves_mood_silhouette():
+    """With speaker-confounded data, normalization should improve mood clustering."""
+    rng = np.random.default_rng(42)
+    # Two speakers far apart, each with a small mood offset
+    mood_offset = np.array([0, 0, 0, 0, 2.0])
+    speaker_a_happy = rng.standard_normal((15, 5)) + np.array([20, 0, 0, 0, 0]) + mood_offset
+    speaker_a_sad = rng.standard_normal((15, 5)) + np.array([20, 0, 0, 0, 0]) - mood_offset
+    speaker_b_happy = rng.standard_normal((15, 5)) + np.array([0, 20, 0, 0, 0]) + mood_offset
+    speaker_b_sad = rng.standard_normal((15, 5)) + np.array([0, 20, 0, 0, 0]) - mood_offset
+    features = np.vstack([speaker_a_happy, speaker_a_sad, speaker_b_happy, speaker_b_sad]).astype(np.float32)
+    labels = ["happy"] * 15 + ["sad"] * 15 + ["happy"] * 15 + ["sad"] * 15
+    voices = ["a"] * 30 + ["b"] * 30
+
+    raw_sil = compute_silhouette(features, labels)
+    normed = normalize_by_speaker(features, voices)
+    norm_sil = compute_silhouette(normed, labels)
+
+    # Raw should be bad (speaker variance dominates), normalized should be better
+    assert norm_sil > raw_sil
 
 
 # ---------------------------------------------------------------------------
