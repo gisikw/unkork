@@ -23,7 +23,8 @@ COPY pyproject.toml /app/
 RUN pip install --no-cache-dir \
     torch numpy scipy resemblyzer cma soundfile librosa click \
     kokoro kokoro-onnx \
-    requests scikit-learn matplotlib
+    requests scikit-learn matplotlib \
+    "setuptools<81"  # resemblyzer->webrtcvad needs pkg_resources (removed in setuptools 81)
 
 # Pre-install spacy model so Kokoro doesn't pip-install it at runtime.
 RUN python3 -m spacy download en_core_web_sm 2>/dev/null
