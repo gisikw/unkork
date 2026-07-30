@@ -53,6 +53,17 @@ jobs:
           LAST=""
           while [ "$(date +%s)" -lt "$DEADLINE" ]; do
             LAST=$(fort frankenstein overlay '{"overlay": "unkork"}' 2>&1 || true)
+            # An error reply is a configuration fault, not a transient state:
+            # a host will not spontaneously grow a subscription mid-run, so
+            # fail immediately rather than burning the full timeout.
+            ERR=$(echo "$LAST" | jq -r '.body.error // empty' 2>/dev/null || true)
+            if [ -n "$ERR" ]; then
+              echo "Cannot verify deployment: $ERR"
+              echo "  'overlay not found' -> frankenstein has no subscription for unkork."
+              echo "     Add one to its manifest in fort-nix, or drop the deploy steps."
+              echo "  'capability not found' -> frankenstein needs a fort-nix deploy first."
+              exit 1
+            fi
             LIVE=$(echo "$LAST" | jq -r '.body.current.storePath // empty' 2>/dev/null || true)
             if [ "$LIVE" = "$STORE_PATH" ]; then
               echo "Deployed: $STORE_PATH"
