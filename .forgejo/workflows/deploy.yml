@@ -30,9 +30,41 @@ jobs:
       - name: Register Overlay
         run: |
           STORE_PATH=$(readlink -f ./result)
+          echo "STORE_PATH=$STORE_PATH" >> "$GITHUB_ENV"
           curl -sf -X POST https://overlay-registry.gisi.network/infra/unkork \
             -d "{\"storePath\":\"$STORE_PATH\"}"
 
       - name: Trigger Refresh
         run: |
           fort frankenstein refresh '{"overlay": "unkork"}'
+
+      # `refresh` is fire-and-forget: it returns as soon as the host accepts
+      # the nudge, long before the overlay has fetched, restarted, and passed
+      # health checks. Without this step a green run means "the host was
+      # told", not "the new code is live". Poll until the host reports our
+      # exact store path as current.
+      #
+      # Compare store paths, not activation state: a successful rollback also
+      # ends in state "permanent", so only the digest distinguishes "our build
+      # is live" from "our build failed and the old one was restored".
+      - name: Await Deployment
+        run: |
+          DEADLINE=$(( $(date +%s) + 600 ))
+          LAST=""
+          while [ "$(date +%s)" -lt "$DEADLINE" ]; do
+            LAST=$(fort frankenstein overlay '{"overlay": "unkork"}' 2>&1 || true)
+            LIVE=$(echo "$LAST" | jq -r '.body.current.storePath // empty' 2>/dev/null || true)
+            if [ "$LIVE" = "$STORE_PATH" ]; then
+              echo "Deployed: $STORE_PATH"
+              exit 0
+            fi
+            STATE=$(echo "$LAST" | jq -r '.body.state // "?"' 2>/dev/null || echo "?")
+            echo "waiting: state=$STATE live=${LIVE:-<none>}"
+            sleep 10
+          done
+          echo "Timed out after 10m waiting for unkork to go live."
+          echo "Expected: $STORE_PATH"
+          echo "Host reported:"
+          echo "$LAST"
+          echo "Check the host's journal: fort frankenstein journal '{\"unit\": \"fort-overlay-manager-check\"}'"
+          exit 1
